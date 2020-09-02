@@ -1,0 +1,291 @@
+Using EC2 Roles and Instance Profiles
+Introduction
+AWS Identity and Access Management (IAM) roles for Amazon Elastic Compute Cloud (EC2) provide the ability to grant instances temporary credentials. These temporary credentials can then be used by hosted applications to access permissions configured within the role. IAM roles eliminate the need for managing credentials, help mitigate long-term security risks, and simplify permissions management. Prerequisites for this lab include understanding how to log in to and use the AWS Management Console, EC2 basics (including how to launch an instance), IAM basics (including users, policies, and roles), and how to use the AWS CLI.
+
+Solution
+Log in to the AWS console using the cloud_user credentials provided. Once inside the AWS account, make sure you are using us-east-1 (N. Virginia) as the selected region.
+
+Hint: When copying and pasting code into Vim from the lab guide, first enter :set paste (and then i to enter insert mode) to avoid adding unnecessary spaces and hashes.
+
+Open the labreferences.txt File
+Navigate to S3.
+
+From the list of buckets, open the one that contains the text s3bucketlookupfiles in the middle of its name.
+
+Select the labreferences.txt document.
+
+Click Download on the labreferences.txt panel that appears.
+
+Once downloaded, open the labreferences.txt file we will reference it throughout other portions of this lab.
+
+Create the DEV IAM Role via the AWS CLI
+Set the AWS CLI Region and Output Type
+Open a terminal to the bastion host, using the credentials on the lab page (replacing <BASTION_HOST_PUBLIC_IP> with the public IP on the lab page):
+
+ssh cloud_user@<BASTION_HOST_PUBLIC_IP>
+Run the following command:
+
+[cloud_user@bastion ]$ aws configure
+Press Enter twice to leave the AWS access key ID and AWS secret access key blank.
+
+Enter us-east-1 as the default region name.
+
+Enter json as the default output format.
+
+Create IAM Trust Policy for an EC2 Role
+Create a file called trust_policy_ec2.json
+
+[cloud_user@bastion ]$ vim trust_policy_ec2.json
+To avoid adding unnecessary spaces or hashes, type :set paste and then i to enter insert mode.
+
+Paste in the following content:
+
+{
+"Version": "2012-10-17",
+"Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {"Service": "ec2.amazonaws.com"},
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+Save and quit the file by pressing Escape followed by :wq!.
+
+Create the DEV IAM Role
+Run the following AWS CLI command:
+
+[cloud_user@bastion ]$ aws iam create-role --role-name DEV_ROLE --assume-role-policy-document file://trust_policy_ec2.json
+Create the IAM Policy for the S3 Dev Bucket Read Access via the AWS CLI
+Create a file called dev_s3_read_access.json:
+
+[cloud_user@bastion ]$ vim dev_s3_read_access.json
+To avoid adding unnecessary spaces or hashes, type :set paste and then i to enter insert mode.
+
+Enter the following content (be sure to replace <DEV_S3_BUCKET_NAME> with the bucket name provided in the labreferences.txt file before saving the file):
+
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+          "Sid": "AllowUserToSeeBucketListInTheConsole",
+          "Action": ["s3:ListAllMyBuckets", "s3:GetBucketLocation"],
+          "Effect": "Allow",
+          "Resource": ["arn:aws:s3:::*"]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:Get*",
+                "s3:List*"
+            ],
+            "Resource": [
+                "arn:aws:s3:::<DEV_S3_BUCKET_NAME>/*",
+                "arn:aws:s3:::<DEV_S3_BUCKET_NAME>"
+            ]
+        }
+    ]
+}
+Save and quit the file by pressing Escape followed by :wq!.
+
+Create the managed policy called DevS3ReadAccess:
+
+[cloud_user@bastion ]$ aws iam create-policy --policy-name DevS3ReadAccess --policy-document file://dev_s3_read_access.json
+Copy the policy ARN in the output, and paste it into the labreferences.txt file — we'll need it in a minute.
+
+Attach Permissions to the DEV_ROLE via the AWS CLI
+Attach Managed Policy to Role
+Run the following AWS CLI command, and be sure to replace <POLICY_ARN_FROM_LAST_STEP> with the ARN you just copied:
+
+[cloud_user@bastion ]$ aws iam attach-role-policy --role-name DEV_ROLE --policy-arn "<POLICY_ARN_FROM_LAST_STEP>"
+Verify Settings
+Verify the managed policy was attached:
+
+[cloud_user@bastion ]$ aws iam list-attached-role-policies --role-name DEV_ROLE
+Get the policy details, including the current version (be sure to replace <POLICY_ARN_FROM_LAST_STEP> with the same ARN we used before in the AWS command's output):
+
+[cloud_user@bastion ]$ aws iam get-policy --policy-arn "<POLICY_ARN_FROM_LAST_STEP>"
+Copy the DefaultVersionId and save it in our text document as we will need it for the next step.
+
+Get the permissions associated with the current policy version (be sure to replace <POLICY_ARN> and <DEFAULT_VERSION_ID> with the output of the get-policy command):
+
+[cloud_user@bastion ]$ aws iam get-policy-version --policy-arn "<POLICY_ARN>" --version-id "<DEFAULT_VERSION_ID>"
+Create the DEV Instance Profile and add the DEV_ROLE via the AWS CLI
+Create instance profile named DEV_PROFILE:
+
+[cloud_user@bastion ]$ aws iam create-instance-profile --instance-profile-name DEV_PROFILE
+Note: There is a possibility that you will get an error saying the profile already exists. If so, move on to the next step.
+
+Add role to the Dev_PROFILE called DEV_ROLE:
+
+[cloud_user@bastion ]$ aws iam add-role-to-instance-profile --instance-profile-name DEV_PROFILE --role-name DEV_ROLE
+Verify the configuration:
+
+[cloud_user@bastion ]$ aws iam get-instance-profile --instance-profile-name DEV_PROFILE
+Attach the DEV_PROFILE to an Instance
+In the AWS console, navigate to EC2.
+
+From the side bar, select Instances.
+
+Copy the instance ID of the instance named Web Server instance and paste it into the labreferences.txt file — we'll need it in a second.
+
+In the terminal, attach the DEV_PROFILE to an EC2 instance (be sure to replace the <LAB_WEB_SERVER_INSTANCE_ID> with the web server instance ID you just copied):
+
+[cloud_user@bastion ]$ aws ec2 associate-iam-instance-profile --instance-id <LAB_WEB_SERVER_INSTANCE_ID> --iam-instance-profile Name="DEV_PROFILE"
+Verify the configuration (be sure to replace the <LAB_WEB_SERVER_INSTANCE_ID> with your web server instance ID):
+
+[cloud_user@bastion ]$ aws ec2 describe-instances --instance-ids <LAB_WEB_SERVER_INSTANCE_ID>
+This command's output should show that this instance is using DEV_PROFILE as an IamInstanceProfile. To do so, locate the IamInstanceProfile section in the output, and look below to make sure that the "ARN" section end in /DEV_PROFILE.
+
+Test DEV_ROLE Permissions
+Log In to the Web Server Instance via SSH
+Open a new terminal.
+
+Log in to the web server instance via SSH using the credentials on the lab page, including the public IP of the web server.
+
+Test the Configuration
+Run the following command to determine the cloud_user identity reflects the ARN and account number we added:
+
+[cloud_user@webserver ]$ aws sts get-caller-identity
+Verify access to the <DEV_S3_BUCKET_NAME> in your lab (be sure to replace the <DEV_S3_BUCKET_NAME> with the value provided in the labreferences.txt file):
+
+[cloud_user@webserver ]$ aws s3 ls
+This first attempt will lead to an error:
+
+[cloud_user@webserver ]$ aws s3 ls s3://<DEV_S3_BUCKET_NAME>
+The Order of Things: Part 1 — AWS CLI Configuration
+AWS CLI Configuration
+Assign the permissions for user CaptainKirk (be sure to replace <ACCESS KEY - CAPTAIN KIRK> and <SECRET ACCESS KEY - CAPTAIN KIRK> with the values provided in the labreferences.txt file):
+
+[cloud_user@webserver ]$ aws configure
+AWS Access Key ID [None]: <ACCESS KEY - CAPTAIN KIRK>
+AWS Secret Access Key [None]: <SECRET ACCESS KEY - CAPTAIN KIRK>
+Default region name [None]: us-east-1
+Default output format [None]: json
+Test the Configuration
+Determine the identity currently used in the order (it should be CaptainKirk):
+
+[cloud_user@webserver ]$ aws sts get-caller-identity
+Verify CaptainKirk's access to the <SECRET_S3_BUCKET_NAME> in your lab (be sure to replace the <SECRET_S3_BUCKET_NAME> with the value provided in the labreferences.txt file):
+
+[cloud_user@webserver ]$ aws s3 ls
+[cloud_user@webserver ]$ aws s3 ls s3://<SECRET_S3_BUCKET_NAME>
+The Order of Things: Part 2 — Environment Variable Configuration
+Environment Variable Configuration
+Set environment variables to assign the permissions for EngineerScotty (be sure to replace <ACCESS KEY - ENGINEER SCOTTY> and <SECRET ACCESS KEY - ENGINEER SCOTTY> with the values provided in the labreferences.txt file):
+
+[cloud_user@webserver ]$ export AWS_ACCESS_KEY_ID=<ACCESS KEY - ENGINEER SCOTTY>
+[cloud_user@webserver ]$ export AWS_SECRET_ACCESS_KEY=<SECRET ACCESS KEY - ENGINEER SCOTTY>
+Test the Configuration
+Determine the identity currently used in the order (it should be EngineerScotty):
+
+[cloud_user@webserver ]$ aws sts get-caller-identity
+Verify EngineerScotty's access to the <ENGINEERING_S3_BUCKET_NAME> in your lab (be sure to replace the <ENGINEERING_S3_BUCKET_NAME> with the value provided in the labreferences.txt file):
+
+[cloud_user@webserver ]$ aws s3 ls
+[cloud_user@webserver ]$ aws s3 ls s3://<ENGINEERING_S3_BUCKET_NAME>
+Verify EngineerScotty's access is denied to the <SECRET_S3_BUCKET_NAME> (be sure to replace the <SECRET_S3_BUCKET_NAME> with the value provided in the labreferences.txt file):
+
+aws s3 ls s3://<SECRET_S3_BUCKET_NAME>
+The Order of Things: Part 3 — Cleanup
+Clear the Environment Variables
+Remove the identity we set with the access variables:
+
+[cloud_user@webserver ]$ unset AWS_ACCESS_KEY_ID
+[cloud_user@webserver ]$ unset AWS_SECRET_ACCESS_KEY
+Determine the identity currently used in the order (it should be CaptainKirk):
+
+[cloud_user@webserver ]$ aws sts get-caller-identity
+Remove the ~/.aws/credentials File
+Run the following command:
+
+[cloud_user@webserver ]$ rm ~/.aws/credentials
+Determine the identity currently used in the order (it should be DEV_ROLE):
+
+[cloud_user@webserver ]$ aws sts get-caller-identity
+Create the IAM Policy for the S3 Prod Bucket Read Access via the AWS Management Console
+In the AWS console, navigate to IAM > Policies.
+
+Click Create policy.
+
+Click the JSON tab.
+
+Paste the following text as the policy (be sure to replace <PROD_S3_BUCKET_NAME> with the bucket name provided in the labreferences.txt file):
+
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+          "Sid": "AllowUserToSeeBucketListInTheConsole",
+          "Action": ["s3:ListAllMyBuckets", "s3:GetBucketLocation"],
+          "Effect": "Allow",
+          "Resource": ["arn:aws:s3:::*"]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:Get*",
+                "s3:List*"
+            ],
+            "Resource": [
+                "arn:aws:s3:::<PROD_S3_BUCKET_NAME>/*",
+                "arn:aws:s3:::<PROD_S3_BUCKET_NAME>"
+            ]
+        }
+    ]
+}
+Click Review policy.
+
+Enter ProdS3ReadAccess as the policy name.
+
+Click Create policy.
+
+Create the PROD IAM Role and Instance Profile via the AWS Management Console
+Click Roles on the left-hand menu.
+
+Click Create role.
+
+Select EC2 as the service that will use this role.
+
+Click Next: Permissions.
+
+In the search box, enter ProdS3ReadAccess.
+
+Click the checkbox to select ProdS3ReadAccess.
+
+Click Next: Tags.
+
+Click Next: Review.
+
+Set the following values:
+
+Role name: PROD_ROLE
+Role description: Provides access to production S3 resources
+Click Create role.
+
+Attach the PROD Instance Profile to the Instance via the AWS Management Console
+Navigate to EC2 > Instances.
+
+Select the Web Server instance checkbox.
+
+Click Actions > Instance Settings > Attach/Replace IAM Role.
+
+Select PROD_ROLE as the IAM role.
+
+Click Apply.
+Test PROD_ROLE Permissions
+Log In to the Web Server Instance via SSH
+Open the existing terminal connected to the web server instance. (You may need to reconnect if you've been disconnected.)
+Test the Configuration
+Determine the identity currently used in the order (it should be PROD_ROLE):
+
+[cloud_user@webserver ]$ aws sts get-caller-identity
+Verify access to the :<PROD_S3_BUCKET_NAME> (be sure to replace the <PROD_S3_BUCKET_NAME> with the value provided in the labreferences.txt file):
+
+[cloud_user@webserver ]$ aws s3 ls
+[cloud_user@webserver ]$ aws s3 ls s3://<PROD_S3_BUCKET_NAME>
+Verify access is denied to the <SECRET_S3_BUCKET_NAME> (be sure to replace the <SECRET_S3_BUCKET_NAME> with the value provided in the labreferences.txt file):
+
+aws s3 ls s3://<SECRET_S3_BUCKET_NAME>
+Conclusion
+Congratulations on successfully completing this hands-on lab!
